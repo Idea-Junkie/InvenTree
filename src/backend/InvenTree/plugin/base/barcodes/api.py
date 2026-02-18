@@ -537,6 +537,7 @@ class BarcodePOReceive(BarcodeView):
 
         for current_plugin in plugins:
             try:
+                # Will either Output Debugresponse if No_Match is True or return the regular response if No_Match is False
                 result = current_plugin.scan_receive_item(
                     barcode,
                     request.user,
@@ -546,13 +547,35 @@ class BarcodePOReceive(BarcodeView):
                     line_item=line_item,
                     auto_allocate=auto_allocate,
                 )
+
             except Exception:
                 log_error('BarcodePOReceive.handle_barcode', plugin=current_plugin.slug)
                 continue
+            
+            # No_Match Determines if it found a exact match for all the required fields from scan_recieve_item
+            if result['No_Match'] is True:
 
-            if result is None:
-                continue
+                # Supplier does not have associated Supplier ID
+                if result['supplier'] is None:
+                    response['PluginError'] = current_plugin.name + ':No supplier ID found '
+                    continue
+                
+                # No PO(Purchase Order) or Supplier Part Found
+                if result['PO'] is None and result['supplier_part'] is None:
+                    continue
 
+                # PO(Purchase Order) exists and is found but Supplier part DNE 
+                if result['PO'] != None and result['supplier_part'] is None:
+                    # Adds what is causing error for barcode scan
+                    response[current_plugin.name + " Debug" ] = result
+                    PluginError = _('Purchase order Found\rNo supplier Part Match')
+
+                # Supplier Part is Found but PO(Purchase Order) DNE
+                elif result['PO'] is None and result['supplier_part'] != None:
+                    # Adds what is causing error for barcode scan
+                    response[current_plugin.name + " Debug" ] = result
+                    PluginError = _('Supplier Part Found\rNo Purchase Order Match')
+                
             if 'error' in result:
                 logger.info(
                     '%s.scan_receive_item(...) returned an error: %s',
@@ -569,12 +592,16 @@ class BarcodePOReceive(BarcodeView):
 
         response['plugin'] = plugin.name if plugin else None
 
-        if plugin_response:
+        if plugin_response and plugin_response.get('No_Match') is False:
             response = {**response, **plugin_response}
 
         # A plugin has not been found!
         if plugin is None:
             response['error'] = _('No plugin match for supplier barcode')
+
+        # A plugin was found, with a Error
+        elif PluginError:
+            response['error'] = _(PluginError)
 
         self.log_scan(request, response, 'success' in response)
 
